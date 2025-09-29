@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+
 """
 Cliente Python para el Vehículo Autónomo
 Interfaz gráfica con Tkinter
@@ -170,6 +170,7 @@ class VehicleClient:
             port = int(self.port_var.get())
             
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.settimeout(30)  # Timeout largo para evitar desconexión prematura
             self.socket.connect((host, port))
             
             self.connected = True
@@ -193,11 +194,10 @@ class VehicleClient:
         self.running = False
         self.connected = False
         self.authenticated = False
-        
         if self.socket:
+            self.log_message("[DEBUG] Cerrando socket y desconectando...")
             self.socket.close()
             self.socket = None
-            
         self.connect_btn.config(text="Conectar")
         self.auth_btn.config(state="disabled")
         self.disable_command_buttons()
@@ -217,9 +217,9 @@ class VehicleClient:
             return
             
         try:
-            auth_message = f"AUTH_REQUEST|{int(time.time())}|NULL|{username}:{password}|CHECKSUM"
+            auth_message = f"AUTH_REQUEST|{int(time.time())}|NULL|{username}:{password}|CHECKSUM\r\n"
             self.socket.send(auth_message.encode())
-            self.log_message(f"Enviado: {auth_message}")
+            self.log_message(f"Enviado: {auth_message.strip()}")
         except Exception as e:
             messagebox.showerror("Error", f"Error enviando autenticación: {str(e)}")
             
@@ -227,9 +227,8 @@ class VehicleClient:
         if not self.authenticated or not self.token:
             messagebox.showerror("Error", "Debe autenticarse como administrador")
             return
-            
         try:
-            cmd_message = f"COMMAND_REQUEST|{int(time.time())}|{self.token}|{command}:{params}|CHECKSUM"
+            cmd_message = f"COMMAND_REQUEST|{int(time.time())}|{self.token}|{command}:{params}|CHECKSUM\r\n"
             self.socket.send(cmd_message.encode())
             self.log_message(f"Comando enviado: {command} {params}")
         except Exception as e:
@@ -239,72 +238,86 @@ class VehicleClient:
         if not self.authenticated or not self.token or self.user_type != "ADMIN":
             messagebox.showerror("Error", "Debe ser administrador")
             return
-            
         try:
-            list_message = f"LIST_USERS_REQUEST|{int(time.time())}|{self.token}|NULL|CHECKSUM"
+            list_message = f"LIST_USERS_REQUEST|{int(time.time())}|{self.token}|NULL|CHECKSUM\r\n"
             self.socket.send(list_message.encode())
             self.log_message("Solicitando lista de usuarios...")
         except Exception as e:
             messagebox.showerror("Error", f"Error solicitando usuarios: {str(e)}")
             
     def receive_messages(self):
+        buffer = ""
         while self.running and self.connected:
             try:
-                data = self.socket.recv(1024).decode()
+                data = self.socket.recv(1024)
+                self.log_message(f"[DEBUG] Bytes recibidos: {data}")
                 if not data:
+                    self.log_message("[DEBUG] No se recibieron datos, cerrando conexión.")
                     break
-                    
-                self.log_message(f"Recibido: {data}")
-                self.process_message(data)
-                
+                try:
+                    decoded = data.decode()
+                except Exception as e:
+                    self.log_message(f"[ERROR] Fallo al decodificar datos: {str(e)}")
+                    break
+                self.log_message(f"[DEBUG] Cadena recibida: {decoded}")
+                buffer += decoded
+                while '\r\n' in buffer:
+                    msg, buffer = buffer.split('\r\n', 1)
+                    self.log_message(f"[DEBUG] Procesando mensaje separado: {msg}")
+                    self.process_message(msg)
             except socket.timeout:
+                self.log_message("[DEBUG] Timeout de socket, esperando más datos...")
                 continue
             except Exception as e:
                 if self.running:
-                    self.log_message(f"Error recibiendo: {str(e)}")
+                    self.log_message(f"[ERROR] Error recibiendo: {str(e)}")
                 break
-                
         # Si llega aquí, la conexión se perdió
         self.root.after(0, self.disconnect)
         
     def process_message(self, message):
+        self.log_message(f"[DEBUG] Procesando mensaje: {message}")
         parts = message.split('|')
+        self.log_message(f"[DEBUG] Partes del mensaje: {parts}")
         if len(parts) < 4:
+            self.log_message(f"[ERROR] Mensaje recibido con formato incorrecto: {message}")
             return
-            
         msg_type = parts[0]
         timestamp = parts[1]
         token = parts[2]
         data = parts[3]
-        
+        self.log_message(f"[DEBUG] Tipo: {msg_type}, Timestamp: {timestamp}, Token: {token}, Data: {data}")
         if msg_type == "AUTH_RESPONSE":
+            self.log_message(f"[DEBUG] Procesando AUTH_RESPONSE: {data}")
             if ":" in data:
                 user_type, status = data.split(':', 1)
+                self.log_message(f"[DEBUG] user_type: {user_type}, status: {status}")
                 if status == "200":
                     self.authenticated = True
                     self.token = token
                     self.user_type = user_type
                     self.status_var.set(f"Autenticado como {user_type}")
-                    
+                    self.log_message(f"[INFO] Autenticación exitosa como {user_type}")
                     if user_type == "ADMIN":
                         self.enable_command_buttons()
-                    
                     self.root.after(0, lambda: messagebox.showinfo("Éxito", f"Autenticado como {user_type}"))
                 else:
+                    self.log_message(f"[ERROR] Autenticación fallida")
                     self.root.after(0, lambda: messagebox.showerror("Error", "Autenticación fallida"))
-                    
         elif msg_type == "TELEMETRY":
+            self.log_message(f"[DEBUG] Procesando TELEMETRY: {data}")
             self.process_telemetry(data)
-            
         elif msg_type == "COMMAND_RESPONSE":
+            self.log_message(f"[DEBUG] Procesando COMMAND_RESPONSE: {data}")
             if ":" in data:
                 status, message = data.split(':', 1)
+                self.log_message(f"[DEBUG] status: {status}, message: {message}")
                 if status == "200":
                     self.log_message(f"Comando ejecutado: {message}")
                 else:
                     self.log_message(f"Error en comando: {message}")
-                    
         elif msg_type == "LIST_USERS_RESPONSE":
+            self.log_message(f"[DEBUG] Procesando LIST_USERS_RESPONSE: {data}")
             if ":" in data:
                 count, users = data.split(':', 1)
                 user_list = users.rstrip(',').split(',') if users else []
