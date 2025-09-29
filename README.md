@@ -33,7 +33,7 @@
 - Para Python
 	- `Python 3.12.11`
 	- `Pip 25.2`
-	- Thinker (Manejo de Interfaz de Usuario) `Tlc/Tk 8.6.16`
+	- Tkinter (Manejo de Interfaz de Usuario) `Tlc/Tk 8.6.16`
 
 ## Introducción
 Este proyecto implementa un sistema de telemetría para vehículos autónomos que permite la comunicación bidireccional entre un vehículo (servidor (programado en C)) y múltiples clientes (usuarios programados en Java y Python)). El sistema soporta dos tipos de usuarios: administradores que pueden enviar comandos de control, y observadores que solo reciben datos de telemetría.
