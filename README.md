@@ -535,25 +535,24 @@ grep  "REQUEST"  logs/vehicle.log | cut  -d' '  -f2 | sort | uniq  -c
 ## Entrega del Proyecto
 ### Checklist de Entrega
 
-- [ ] Servidor compilado y funcionando
+- [x] Servidor compilado y funcionando
 
-- [ ] Cliente Python con GUI funcional
+- [x] Cliente Python con GUI funcional
 
-- [ ] Cliente Java con GUI funcional
+- [x] Cliente Java con GUI funcional
 
-- [ ] Makefile funcional
+- [x] Makefile funcional
 
-- [ ] Documentación completa
+- [x] Documentación completa
 
 - [ ] Video demostrativo (12 min)
 
-- [ ] Repositorio GitHub configurado
+- [x] Repositorio GitHub configurado
 
 - [ ] Código comentado y limpio
 
 - [ ] Pruebas realizadas
 
-  
 
 ### Estructura del Repositorio GitHub
 
