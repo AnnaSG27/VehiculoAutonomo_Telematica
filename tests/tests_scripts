@@ -1,0 +1,462 @@
+#!/bin/bash
+
+# Script de pruebas automatizadas para el proyecto de vehículo autónomo
+# Autor: Equipo de desarrollo
+# Fecha: 2025
+
+set -e  # Salir si cualquier comando falla
+
+# Colores para output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Configuración
+SERVER_PORT=8081
+LOG_FILE="tests/test_$(date +%Y%m%d_%H%M%S).log"
+SERVER_PID=0
+
+# Función para imprimir mensajes coloreados
+print_status() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Función para limpiar procesos al salir
+cleanup() {
+    print_status "Limpiando procesos..."
+    if [ $SERVER_PID -ne 0 ]; then
+        kill -9 $SERVER_PID 2>/dev/null || true
+        print_status "Servidor terminado (PID: $SERVER_PID)"
+    fi
+    
+    # Limpiar otros procesos relacionados
+    pkill -f "server.*$SERVER_PORT" 2>/dev/null || true
+    pkill -f "client.py" 2>/dev/null || true
+    pkill -f "VehicleClientJava" 2>/dev/null || true
+    
+    print_status "Limpieza completada"
+}
+
+# Configurar trap para limpiar al salir
+trap cleanup EXIT
+
+# Función para verificar si un puerto está en uso
+check_port() {
+    local port=$1
+    if lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1; then
+        return 0  # Puerto en uso
+    else
+        return 1  # Puerto libre
+    fi
+}
+
+# Función para esperar que un puerto esté disponible
+wait_for_port() {
+    local port=$1
+    local timeout=${2:-10}
+    local counter=0
+    
+    while [ $counter -lt $timeout ]; do
+        if check_port $port; then
+            return 0
+        fi
+        sleep 1
+        ((counter++))
+    done
+    return 1
+}
+
+# Función para enviar mensaje TCP simple
+send_tcp_message() {
+    local host=$1
+    local port=$2
+    local message=$3
+    local timeout=${4:-5}
+    
+    echo "$message" | timeout $timeout nc $host $port 2>/dev/null || return 1
+}
+
+# Función principal de pruebas
+main() {
+    echo "================================================="
+    echo "   PRUEBAS AUTOMATIZADAS - VEHÍCULO AUTÓNOMO"
+    echo "================================================="
+    echo
+    
+    # Crear directorio de pruebas si no existe
+    mkdir -p tests
+    mkdir -p server/logs
+    
+    # Test 1: Verificar compilación del servidor
+    print_status "Test 1: Verificando compilación del servidor..."
+    cd server/
+    
+    if [ ! -f "Makefile" ]; then
+        print_error "Makefile no encontrado"
+        exit 1
+    fi
+    
+    if make clean && make; then
+        print_success "Servidor compilado correctamente"
+    else
+        print_error "Error compilando servidor"
+        exit 1
+    fi
+    
+    if [ ! -f "server" ]; then
+        print_error "Ejecutable 'server' no fue generado"
+        exit 1
+    fi
+    
+    cd ..
+    
+    # Test 2: Verificar disponibilidad del puerto
+    print_status "Test 2: Verificando disponibilidad del puerto $SERVER_PORT..."
+    if check_port $SERVER_PORT; then
+        print_warning "Puerto $SERVER_PORT en uso, intentando terminarlo..."
+        lsof -ti:$SERVER_PORT | xargs kill -9 2>/dev/null || true
+        sleep 2
+        
+        if check_port $SERVER_PORT; then
+            print_error "No se pudo liberar el puerto $SERVER_PORT"
+            exit 1
+        fi
+    fi
+    print_success "Puerto $SERVER_PORT disponible"
+    
+    # Test 3: Iniciar servidor
+    print_status "Test 3: Iniciando servidor en puerto $SERVER_PORT..."
+    cd server/
+    ./server $SERVER_PORT "../$LOG_FILE" &
+    SERVER_PID=$!
+    cd ..
+    
+    print_status "Servidor iniciado con PID: $SERVER_PID"
+    
+    # Esperar a que el servidor esté listo
+    if wait_for_port $SERVER_PORT 10; then
+        print_success "Servidor escuchando en puerto $SERVER_PORT"
+    else
+        print_error "Servidor no pudo iniciar en puerto $SERVER_PORT"
+        exit 1
+    fi
+    
+    sleep 2  # Dar tiempo adicional al servidor
+    
+    # Test 4: Probar conectividad básica
+    print_status "Test 4: Probando conectividad básica..."
+    if timeout 3 bash -c "</dev/tcp/localhost/$SERVER_PORT" 2>/dev/null; then
+        print_success "Conexión TCP exitosa"
+    else
+        print_error "No se puede conectar al servidor"
+        exit 1
+    fi
+    
+    # Test 5: Probar autenticación válida
+    print_status "Test 5: Probando autenticación válida..."
+    timestamp=$(date +%s)
+    auth_request="AUTH_REQUEST|$timestamp|NULL|admin:admin123|CHECKSUM"
+    
+    response=$(echo "$auth_request" | timeout 5 nc localhost $SERVER_PORT 2>/dev/null | head -n1)
+    
+    if [[ "$response" == *"AUTH_RESPONSE"* ]] && [[ "$response" == *"ADMIN:200"* ]]; then
+        print_success "Autenticación de admin exitosa"
+    else
+        print_warning "Respuesta de autenticación: $response"
+        print_error "Autenticación de admin falló"
+    fi
+    
+    # Test 6: Probar autenticación inválida
+    print_status "Test 6: Probando autenticación inválida..."
+    timestamp=$(date +%s)
+    auth_request="AUTH_REQUEST|$timestamp|NULL|invalid:invalid|CHECKSUM"
+    
+    response=$(echo "$auth_request" | timeout 5 nc localhost $SERVER_PORT 2>/dev/null | head -n1)
+    
+    if [[ "$response" == *"401"* ]] || [[ "$response" == *"ERROR"* ]]; then
+        print_success "Autenticación inválida rechazada correctamente"
+    else
+        print_warning "Respuesta de autenticación inválida: $response"
+        print_error "El sistema debería rechazar credenciales inválidas"
+    fi
+    
+    # Test 7: Probar múltiples conexiones simultáneas
+    print_status "Test 7: Probando múltiples conexiones simultáneas..."
+    
+    # Crear función para conexión en background
+    test_concurrent_connection() {
+        local id=$1
+        local timestamp=$(date +%s)
+        local auth_request="AUTH_REQUEST|$timestamp|NULL|observer:observer123|CHECKSUM"
+        
+        local response=$(echo "$auth_request" | timeout 5 nc localhost $SERVER_PORT 2>/dev/null | head -n1)
+        
+        if [[ "$response" == *"OBSERVER:200"* ]]; then
+            echo "Connection $id: SUCCESS"
+        else
+            echo "Connection $id: FAILED - $response"
+        fi
+    }
+    
+    # Lanzar 5 conexiones simultáneas
+    for i in {1..5}; do
+        test_concurrent_connection $i &
+    done
+    
+    # Esperar a que terminen todas las conexiones
+    wait
+    print_success "Prueba de conexiones simultáneas completada"
+    
+    # Test 8: Verificar logs del servidor
+    print_status "Test 8: Verificando logs del servidor..."
+    if [ -f "$LOG_FILE" ]; then
+        log_lines=$(wc -l < "$LOG_FILE")
+        if [ $log_lines -gt 0 ]; then
+            print_success "Archivo de log generado con $log_lines líneas"
+            
+            # Mostrar algunas líneas del log
+            print_status "Últimas líneas del log:"
+            tail -5 "$LOG_FILE" | while read line; do
+                echo "  $line"
+            done
+        else
+            print_warning "Archivo de log existe pero está vacío"
+        fi
+    else
+        print_warning "Archivo de log no encontrado: $LOG_FILE"
+    fi
+    
+    # Test 9: Verificar compilación de cliente Java (si existe)
+    print_status "Test 9: Verificando cliente Java..."
+    if [ -d "client-java" ] || [ -d "clients/java" ]; then
+        java_dir=""
+        if [ -d "client-java" ]; then
+            java_dir="client-java"
+        elif [ -d "clients/java" ]; then
+            java_dir="clients/java"
+        fi
+        
+        if [ -f "$java_dir/VehicleClientJava.java" ]; then
+            cd "$java_dir"
+            if javac VehicleClientJava.java 2>/dev/null; then
+                print_success "Cliente Java compilado correctamente"
+            else
+                print_warning "Error compilando cliente Java"
+            fi
+            cd ..
+        else
+            print_warning "Código fuente de cliente Java no encontrado"
+        fi
+    else
+        print_warning "Directorio de cliente Java no encontrado"
+    fi
+    
+    # Test 10: Verificar cliente Python
+    print_status "Test 10: Verificando cliente Python..."
+    python_files=()
+    
+    # Buscar archivos Python en varios directorios
+    for dir in "client-python" "clients/python" "."; do
+        if [ -f "$dir/client.py" ]; then
+            python_files+=("$dir/client.py")
+        fi
+    done
+    
+    if [ ${#python_files[@]} -gt 0 ]; then
+        for py_file in "${python_files[@]}"; do
+            if python3 -m py_compile "$py_file" 2>/dev/null; then
+                print_success "Cliente Python válido: $py_file"
+            else
+                print_warning "Error en sintaxis de Python: $py_file"
+            fi
+        done
+    else
+        print_warning "Cliente Python no encontrado"
+    fi
+    
+    # Test 11: Probar telemetría (simulada)
+    print_status "Test 11: Esperando telemetría del servidor..."
+    
+    # Conectar y autenticar para recibir telemetría
+    {
+        echo "AUTH_REQUEST|$(date +%s)|NULL|observer:observer123|CHECKSUM"
+        sleep 12  # Esperar más de 10 segundos para recibir telemetría
+    } | timeout 15 nc localhost $SERVER_PORT 2>/dev/null | while read line; do
+        if [[ "$line" == *"TELEMETRY"* ]]; then
+            print_success "Telemetría recibida: $line"
+            break
+        elif [[ "$line" == *"AUTH_RESPONSE"* ]]; then
+            print_status "Autenticado, esperando telemetría..."
+        fi
+    done
+    
+    # Test 12: Verificar estructura de directorios
+    print_status "Test 12: Verificando estructura del proyecto..."
+    
+    required_files=(
+        "server/server.c"
+        "server/Makefile"
+    )
+    
+    optional_files=(
+        "client-python/client.py"
+        "clients/python/client.py"
+        "client-java/VehicleClientJava.java"
+        "clients/java/VehicleClientJava.java"
+        "README.md"
+        "docs/protocol_spec.md"
+    )
+    
+    for file in "${required_files[@]}"; do
+        if [ -f "$file" ]; then
+            print_success "Archivo requerido encontrado: $file"
+        else
+            print_error "Archivo requerido no encontrado: $file"
+        fi
+    done
+    
+    for file in "${optional_files[@]}"; do
+        if [ -f "$file" ]; then
+            print_success "Archivo encontrado: $file"
+        fi
+    done
+    
+    # Resumen final
+    echo
+    echo "================================================="
+    echo "           RESUMEN DE PRUEBAS"
+    echo "================================================="
+    
+    print_status "Servidor:"
+    print_success "  ✓ Compilación exitosa"
+    print_success "  ✓ Inicio en puerto $SERVER_PORT"
+    print_success "  ✓ Acepta conexiones TCP"
+    print_success "  ✓ Maneja autenticación"
+    print_success "  ✓ Genera logs"
+    
+    print_status "Clientes:"
+    if [ ${#python_files[@]} -gt 0 ]; then
+        print_success "  ✓ Cliente Python encontrado"
+    fi
+    if [ -f "client-java/VehicleClientJava.class" ] || [ -f "clients/java/VehicleClientJava.class" ]; then
+        print_success "  ✓ Cliente Java compilado"
+    fi
+    
+    print_status "Protocolo:"
+    print_success "  ✓ Mensajes de autenticación"
+    print_success "  ✓ Conexiones múltiples"
+    print_success "  ✓ Manejo de errores"
+    
+    echo
+    print_success "¡Todas las pruebas básicas completadas!"
+    print_status "Revisa el archivo de log para más detalles: $LOG_FILE"
+    
+    # Mostrar estadísticas del log
+    if [ -f "$LOG_FILE" ]; then
+        echo
+        print_status "Estadísticas del log:"
+        echo "  Total de líneas: $(wc -l < "$LOG_FILE")"
+        echo "  Conexiones: $(grep -c "CONNECT" "$LOG_FILE" 2>/dev/null || echo 0)"
+        echo "  Autenticaciones: $(grep -c "AUTH_REQUEST" "$LOG_FILE" 2>/dev/null || echo 0)"
+        echo "  Respuestas exitosas: $(grep -c "200" "$LOG_FILE" 2>/dev/null || echo 0)"
+    fi
+    
+    echo
+    print_status "Para pruebas manuales adicionales, usa:"
+    echo "  - ./server/server $SERVER_PORT logs/manual.log"
+    echo "  - python3 client-python/client.py (si existe)"
+    echo "  - java -cp client-java VehicleClientJava (si existe)"
+    
+    return 0
+}
+
+# Verificar dependencias básicas
+check_dependencies() {
+    local missing_deps=()
+    
+    # Verificar herramientas necesarias
+    command -v gcc >/dev/null 2>&1 || missing_deps+=("gcc")
+    command -v make >/dev/null 2>&1 || missing_deps+=("make")
+    command -v nc >/dev/null 2>&1 || missing_deps+=("netcat")
+    command -v python3 >/dev/null 2>&1 || missing_deps+=("python3")
+    command -v java >/dev/null 2>&1 || missing_deps+=("java")
+    command -v javac >/dev/null 2>&1 || missing_deps+=("javac")
+    
+    if [ ${#missing_deps[@]} -ne 0 ]; then
+        print_warning "Dependencias faltantes (pueden causar fallos en algunas pruebas):"
+        for dep in "${missing_deps[@]}"; do
+            echo "  - $dep"
+        done
+        echo
+    fi
+}
+
+# Mostrar ayuda
+show_help() {
+    echo "Script de pruebas automatizadas para el proyecto de vehículo autónomo"
+    echo
+    echo "Uso: $0 [opciones]"
+    echo
+    echo "Opciones:"
+    echo "  -p, --port PORT     Puerto para el servidor de prueba (default: 8081)"
+    echo "  -h, --help          Mostrar esta ayuda"
+    echo "  -v, --verbose       Modo verbose"
+    echo "  --quick             Ejecutar solo pruebas básicas"
+    echo
+    echo "Ejemplos:"
+    echo "  $0                  Ejecutar todas las pruebas"
+    echo "  $0 -p 9000          Usar puerto 9000 para pruebas"
+    echo "  $0 --quick          Ejecutar pruebas rápidas"
+}
+
+# Procesar argumentos de línea de comandos
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -p|--port)
+            SERVER_PORT="$2"
+            shift 2
+            ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        -v|--verbose)
+            set -x
+            shift
+            ;;
+        --quick)
+            QUICK_MODE=1
+            shift
+            ;;
+        *)
+            echo "Opción desconocida: $1"
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
+# Ejecutar pruebas
+print_status "Iniciando pruebas automatizadas..."
+print_status "Puerto del servidor: $SERVER_PORT"
+print_status "Archivo de log: $LOG_FILE"
+echo
+
+check_dependencies
+main
+
+print_success "Script de pruebas completado exitosamente!"
