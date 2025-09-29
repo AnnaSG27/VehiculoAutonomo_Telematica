@@ -1,7 +1,6 @@
 """
 Cliente Python para el Vehículo Autónomo
-Interfaz gráfica desarrollada en Tkinter
-Descripción: Este cliente permite la conexión, autenticación y monitoreo de telemetría de un vehículo autónomo a través de una interfaz gráfica.
+Interfaz gráfica con Tkinter
 """
 
 import socket
@@ -12,9 +11,14 @@ import time
 import json
 
 class VehicleClient:
-    # Clase principal del cliente del vehículo autónomo
+    """
+    Clase principal del cliente Python para el vehículo autónomo.
+    Gestiona la conexión, autenticación, recepción de mensajes y la interfaz gráfica.
+    """
     def __init__(self):
-        # Inicializa las variables de estado y datos de telemetría
+        """
+        Inicializa variables, datos de telemetría y configura la interfaz gráfica.
+        """
         self.socket = None
         self.connected = False
         self.authenticated = False
@@ -32,13 +36,12 @@ class VehicleClient:
             'longitude': 0.0,
             'timestamp': 0
         }
-        
-    self.setup_gui()  # type: ignore # Configura la interfaz gráfica
+        # Configura la Interfaz Gráfica
+        self.setup_gui()
         
     def setup_gui(self):
         """
-        Configura y construye la interfaz gráfica principal del cliente.
-        Incluye secciones para conexión, autenticación, telemetría, comandos y log de mensajes.
+        Configura la interfaz gráfica principal usando Tkinter y ttk.
         """
         self.root = tk.Tk()
         self.root.title("Cliente Vehículo Autónomo")
@@ -61,6 +64,7 @@ class VehicleClient:
         main_frame.columnconfigure(1, weight=1)
         
         # --- SECCIÓN DE CONEXIÓN ---
+        # Campos y botón para conectar/desconectar al servidor
         conn_frame = ttk.LabelFrame(main_frame, text="Conexión", padding="5")
         conn_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
@@ -76,6 +80,7 @@ class VehicleClient:
         self.connect_btn.grid(row=0, column=4, padx=(10, 0))
         
         # --- SECCIÓN DE AUTENTICACIÓN ---
+        # Campos para usuario, contraseña y botón de autenticación de usuario
         auth_frame = ttk.LabelFrame(main_frame, text="Autenticación", padding="5")
         auth_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
@@ -95,6 +100,7 @@ class VehicleClient:
         ttk.Label(auth_frame, textvariable=self.status_var, style='Status.TLabel').grid(row=1, column=0, columnspan=5, pady=(5, 0))
         
         # --- SECCIÓN DE TELEMETRÍA ---
+        # Visualización de datos de telemetría recibidos del servidor
         telemetry_frame = ttk.LabelFrame(main_frame, text="Datos de Telemetría", padding="10")
         telemetry_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
         
@@ -129,6 +135,7 @@ class VehicleClient:
         ttk.Label(telemetry_frame, textvariable=self.last_update_var, style='Status.TLabel').grid(row=5, column=1, sticky=tk.W, padx=(10, 0))
         
         # --- SECCIÓN DE COMANDOS (SOLO ADMIN) ---
+        # Controles para el envío de comandos al vehículo (solo si es ADMIN)
         self.commands_frame = ttk.LabelFrame(main_frame, text="Comandos de Control", padding="10")
         self.commands_frame.grid(row=2, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(10, 0), pady=(0, 10))
         
@@ -153,6 +160,7 @@ class VehicleClient:
         self.list_users_btn.pack(fill=tk.X, pady=(10, 2))
         
         # --- SECCIÓN DE LOG ---
+        # Área de texto para mostrar logs de mensajes y errores del cliente
         log_frame = ttk.LabelFrame(main_frame, text="Log de Mensajes", padding="5")
         log_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
         
@@ -163,19 +171,19 @@ class VehicleClient:
         main_frame.rowconfigure(2, weight=1)
         main_frame.rowconfigure(3, weight=1)
         
-        # Configurar cierre de ventana
+        # Configurar cierre de ventana para desconexión limpia
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
     def connect(self):
         """
-        Establece la conexión con el servidor usando los datos ingresados por el usuario.
-        Inicia el hilo de recepción de mensajes.
+        Conecta o desconecta el cliente del servidor según el estado actual.
         """
         if self.connected:
             self.disconnect()
             return
             
         try:
+            #obtener datos de conexión
             host = self.host_var.get()
             port = int(self.port_var.get())
             
@@ -189,7 +197,7 @@ class VehicleClient:
             self.auth_btn.config(state="normal")
             self.status_var.set("Conectado - No autenticado")
             
-            # Iniciar hilo para recibir mensajes
+            # Iniciar hilo para recibir mensajes del servidor
             self.receive_thread = threading.Thread(target=self.receive_messages)
             self.receive_thread.daemon = True
             self.receive_thread.start()
@@ -202,7 +210,7 @@ class VehicleClient:
             
     def disconnect(self):
         """
-        Finaliza la conexión con el servidor y actualiza el estado de la interfaz.
+        Desconecta el cliente del servidor, cierra el socket y actualiza la interfaz.
         """
         self.running = False
         self.connected = False
@@ -219,7 +227,7 @@ class VehicleClient:
         
     def authenticate(self):
         """
-        Envía el mensaje de autenticación al servidor con las credenciales ingresadas.
+        Envía las credenciales de usuario al servidor para autenticación.
         """
         if not self.connected:
             messagebox.showerror("Error", "Debe conectarse primero")
@@ -241,7 +249,7 @@ class VehicleClient:
             
     def send_command(self, command, params):
         """
-        Envía un comando de control al servidor si el usuario está autenticado como administrador.
+        Envía un comando de control al servidor si el usuario está autenticado como ADMIN.
         """
         if not self.authenticated or not self.token:
             messagebox.showerror("Error", "Debe autenticarse como administrador")
@@ -255,7 +263,7 @@ class VehicleClient:
             
     def list_users(self):
         """
-        Solicita al servidor la lista de usuarios conectados (solo para administradores).
+        Solicita al servidor la lista de usuarios conectados. Solo para ADMIN.
         """
         if not self.authenticated or not self.token or self.user_type != "ADMIN":
             messagebox.showerror("Error", "Debe ser administrador")
@@ -269,8 +277,7 @@ class VehicleClient:
             
     def receive_messages(self):
         """
-        Hilo encargado de recibir y procesar los mensajes enviados por el servidor.
-        Procesa cada mensaje por separado usando el delimitador '\r\n'.
+        Hilo para recibir mensajes del servidor y procesarlos.
         """
         buffer = ""
         while self.running and self.connected:
@@ -355,7 +362,7 @@ class VehicleClient:
                 
     def process_telemetry(self, data):
         """
-        Procesa los datos de telemetría recibidos y actualiza las variables correspondientes.
+        Procesa los datos de telemetría recibidos y actualiza la interfaz.
         """
         try:
             # Formato: speed:battery:temperature:direction:latitude:longitude
@@ -376,7 +383,7 @@ class VehicleClient:
             
     def update_telemetry_display(self):
         """
-        Actualiza los valores mostrados en la interfaz gráfica con los datos de telemetría actuales.
+        Actualiza los campos de telemetría en la interfaz gráfica.
         """
         self.speed_var.set(f"{self.telemetry_data['speed']:.1f} km/h")
         
@@ -402,7 +409,7 @@ class VehicleClient:
             
     def enable_command_buttons(self):
         """
-        Habilita los botones de comandos de control para el usuario administrador.
+        Habilita los botones de comando si el usuario es ADMIN.
         """
         self.cmd_speedup_btn.config(state="normal")
         self.cmd_slowdown_btn.config(state="normal")
@@ -413,7 +420,7 @@ class VehicleClient:
         
     def disable_command_buttons(self):
         """
-        Deshabilita los botones de comandos de control para usuarios no administradores.
+        Deshabilita los botones de comando de control para usuarios no ADMIN.
         """
         self.cmd_speedup_btn.config(state="disabled")
         self.cmd_slowdown_btn.config(state="disabled")
@@ -424,7 +431,7 @@ class VehicleClient:
         
     def show_users_window(self, users):
         """
-        Muestra una ventana con la lista de usuarios conectados al sistema.
+        Muestra una ventana emergente con la lista de usuarios conectados.
         """
         users_window = tk.Toplevel(self.root)
         users_window.title("Usuarios Conectados")
@@ -444,7 +451,7 @@ class VehicleClient:
             
     def log_message(self, message):
         """
-        Agrega un mensaje al log de la interfaz gráfica, con timestamp.
+        Agrega un mensaje al log de la interfaz gráfica con timestamp.
         """
         timestamp = time.strftime('%H:%M:%S')
         log_entry = f"[{timestamp}] {message}\n"
@@ -460,7 +467,7 @@ class VehicleClient:
         
     def on_closing(self):
         """
-        Maneja el evento de cierre de la ventana principal, asegurando la desconexión limpia.
+        Maneja el cierre de la ventana principal para desconectar limpiamente.
         """
         if self.connected:
             self.disconnect()
@@ -468,7 +475,7 @@ class VehicleClient:
         
     def run(self):
         """
-        Inicia el bucle principal de la interfaz gráfica.
+        Punto de entrada principal para ejecutar la interfaz gráfica del cliente.
         """
         # Credenciales de ejemplo en la interfaz
         self.username_var.set("admin")  # Cambiar por "observer" para probar modo observador
@@ -477,6 +484,6 @@ class VehicleClient:
         self.root.mainloop()
 
 if __name__ == "__main__":
-    # Punto de entrada principal del cliente
+    # Ejecuta el cliente si el script es el principal
     client = VehicleClient()
     client.run()

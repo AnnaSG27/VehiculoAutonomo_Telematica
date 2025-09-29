@@ -214,7 +214,7 @@ int main(int argc, char *argv[]) {
 }
 
 /*
- * Hilo encargado de gestionar la comunicación con un cliente específico.
+ * Encargado de gestionar la comunicación con un cliente específico.
  * Procesa mensajes, responde y gestiona la desconexión.
  */
 void *client_handler(void *arg) {
@@ -332,7 +332,7 @@ void *client_handler(void *arg) {
 }
 
 /*
- * Hilo encargado de enviar periódicamente los datos de telemetría a todos los clientes conectados.
+ * Encargado de enviar periódicamente los datos de telemetría a todos los clientes conectados.
  */
 void *telemetry_broadcaster(void *arg) {
     char telemetry_msg[BUFFER_SIZE];
