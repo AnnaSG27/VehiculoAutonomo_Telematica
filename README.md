@@ -116,8 +116,8 @@ javac  -version
 #### 1. Descargar el Proyecto
 
 ```bash
-git  clone https://github.com/AnnaSG27/VehiculoAutonomo_Telematica#
-cd  VehículoAutonomo
+git  clone https://github.com/AnnaSG27/VehiculoAutonomo_Telematica
+cd  VehículoAutonomo_Telematica
 ```
 
 #### 2. Compilar el Servidor
