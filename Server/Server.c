@@ -2,6 +2,7 @@
  * server.c - Servidor del Vehículo Autónomo
  * Descripción: Servidor TCP que gestiona la autenticación, comandos y telemetría de un vehículo autónomo.
  */
+#define _POSIX_C_SOURCE 200809L
 
 #include <stdio.h>
 #include <stdlib.h>
