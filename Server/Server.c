@@ -6,26 +6,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <pthread.h>
 #include <time.h>
-#include <errno.h>
 #include <signal.h>
-
-#ifdef _WIN32
-    #include <winsock2.h>
-    #include <ws2tcpip.h>
-    #pragma comment(lib, "ws2_32.lib")
-    #define sleep(x) Sleep(1000 * (x))
-#else
-    #include <unistd.h>
-    #include <sys/socket.h>
-    #include <netinet/in.h>
-    #include <arpa/inet.h>
-    #define SOCKET int
-    #define INVALID_SOCKET -1
-    #define SOCKET_ERROR -1
-    #define closesocket(s) close(s)
-#endif
+#include <errno.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 #define MAX_CLIENTS 50
 #define BUFFER_SIZE 1024
@@ -34,7 +22,7 @@
 #define MAX_PASSWORD 50
 
 typedef struct {
-    SOCKET socket;
+    int socket;
     struct sockaddr_in address;
     char token[TOKEN_SIZE + 1];
     char username[MAX_USERNAME + 1];
@@ -55,26 +43,24 @@ typedef struct {
 
 client_t clients[MAX_CLIENTS];
 vehicle_data_t vehicle;
-SOCKET server_socket;
-volatile int running = 1;
+int server_socket;
+int running = 1;
 pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t vehicle_mutex = PTHREAD_MUTEX_INITIALIZER;
 FILE *log_file = NULL;
 
-// --- Declaraciones de funciones ---
 void log_message(const char *client_info, const char *type, const char *message);
 void generate_token(char *token);
 int authenticate_user(const char *username, const char *password);
+void remove_client(int index);
 void *client_handler(void *arg);
 void *telemetry_broadcaster(void *arg);
 void process_command(int client_idx, const char *command, const char *params);
 void cleanup_and_exit(int sig);
-void remove_client(int index);
 
-// --- Main ---
 int main(int argc, char *argv[]) {
     if (argc != 3) {
-        fprintf(stderr, "Uso: %s <puerto> <archivo_log>\n", argv[0]);
+        printf("Uso: %s <puerto> <archivo_log>\n", argv[0]);
         return 1;
     }
 
@@ -87,16 +73,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    #ifdef _WIN32
-    WSADATA wsa_data;
-    if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
-        fprintf(stderr, "WSAStartup failed.\n");
-        fclose(log_file);
-        return 1;
-    }
-    #endif
-
-    // Inicialización del vehículo
     vehicle.speed = 0.0;
     vehicle.battery = 100.0;
     vehicle.temperature = 22.5;
@@ -105,48 +81,42 @@ int main(int argc, char *argv[]) {
     vehicle.longitude = -75.5812;
     vehicle.running = 1;
 
-    for (int i = 0; i < MAX_CLIENTS; i++) clients[i].active = 0;
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        clients[i].active = 0;
+    }
 
     server_socket = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_socket == INVALID_SOCKET) {
+    if (server_socket < 0) {
         perror("Error creando socket");
         fclose(log_file);
-        #ifdef _WIN32
-        WSACleanup();
-        #endif
         return 1;
     }
 
     int opt = 1;
-    setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
+    setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     struct sockaddr_in server_addr;
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(port);
 
-    if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) == SOCKET_ERROR) {
+    if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
         perror("Error en bind");
-        closesocket(server_socket);
+        close(server_socket);
         fclose(log_file);
-        #ifdef _WIN32
-        WSACleanup();
-        #endif
         return 1;
     }
 
-    if (listen(server_socket, 10) == SOCKET_ERROR) {
+    if (listen(server_socket, 10) < 0) {
         perror("Error en listen");
-        closesocket(server_socket);
+        close(server_socket);
         fclose(log_file);
-        #ifdef _WIN32
-        WSACleanup();
-        #endif
         return 1;
     }
 
     printf("Servidor iniciado en puerto %d\n", port);
     printf("Logs guardándose en: %s\n", log_filename);
+    printf("[DEBUG] Esperando conexiones en puerto %d...\n", port);
 
     signal(SIGINT, cleanup_and_exit);
     signal(SIGTERM, cleanup_and_exit);
@@ -157,20 +127,22 @@ int main(int argc, char *argv[]) {
     while (running) {
         struct sockaddr_in client_addr;
         socklen_t client_len = sizeof(client_addr);
-        SOCKET client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &client_len);
-
-        if (client_socket == INVALID_SOCKET) {
+        int client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &client_len);
+        if (client_socket < 0) {
             if (running) perror("Error en accept");
             continue;
         }
 
         pthread_mutex_lock(&clients_mutex);
         int client_index = -1;
-        for (int i = 0; i < MAX_CLIENTS; i++) if (!clients[i].active) { client_index = i; break; }
-
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+            if (!clients[i].active) {
+                client_index = i;
+                break;
+            }
+        }
         if (client_index == -1) {
-            printf("Máximo de clientes alcanzado. Conexión rechazada.\n");
-            closesocket(client_socket);
+            close(client_socket);
             pthread_mutex_unlock(&clients_mutex);
             continue;
         }
@@ -182,48 +154,40 @@ int main(int argc, char *argv[]) {
         clients[client_index].last_activity = time(NULL);
         memset(clients[client_index].token, 0, TOKEN_SIZE + 1);
         memset(clients[client_index].username, 0, MAX_USERNAME + 1);
+        pthread_mutex_unlock(&clients_mutex);
 
         pthread_t client_thread;
-        int *client_idx_ptr = malloc(sizeof(int));
-        *client_idx_ptr = client_index;
-        pthread_create(&client_thread, NULL, client_handler, client_idx_ptr);
+        int *client_idx = malloc(sizeof(int));
+        *client_idx = client_index;
+        pthread_create(&client_thread, NULL, client_handler, client_idx);
         pthread_detach(client_thread);
 
         char client_info[100];
         sprintf(client_info, "%s:%d", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
         log_message(client_info, "CONNECT", "Nueva conexión establecida");
-
-        pthread_mutex_unlock(&clients_mutex);
     }
 
     pthread_join(telemetry_thread, NULL);
-    closesocket(server_socket);
+    close(server_socket);
     fclose(log_file);
-    #ifdef _WIN32
-    WSACleanup();
-    #endif
-
     return 0;
 }
-/*
- * Encargado de gestionar la comunicación con un cliente específico.
- * Procesa mensajes, responde y gestiona la desconexión.
- */
+
 void *client_handler(void *arg) {
     int client_index = *(int*)arg;
     free(arg);
 
     char client_info[100];
     pthread_mutex_lock(&clients_mutex);
-    sprintf(client_info, "%s:%d", inet_ntoa(clients[client_index].address.sin_addr), ntohs(clients[client_index].address.sin_port));
+    sprintf(client_info, "%s:%d",
+            inet_ntoa(clients[client_index].address.sin_addr),
+            ntohs(clients[client_index].address.sin_port));
     pthread_mutex_unlock(&clients_mutex);
 
     char recv_buffer[BUFFER_SIZE * 2] = {0};
     int recv_len = 0;
-
     while (running && clients[client_index].active) {
-        int bytes_received = recv(clients[client_index].socket, recv_buffer + recv_len, BUFFER_SIZE - 1, 0);
-
+        int bytes_received = recv(clients[client_index].socket, recv_buffer + recv_len, BUFFER_SIZE - recv_len - 1, 0);
         if (bytes_received <= 0) break;
 
         recv_len += bytes_received;
@@ -231,54 +195,49 @@ void *client_handler(void *arg) {
 
         char *line_end;
         while ((line_end = strstr(recv_buffer, "\r\n")) != NULL) {
-            char message[BUFFER_SIZE];
             int msg_len = line_end - recv_buffer;
+            char message[BUFFER_SIZE];
             strncpy(message, recv_buffer, msg_len);
             message[msg_len] = '\0';
 
             clients[client_index].last_activity = time(NULL);
             log_message(client_info, "REQUEST", message);
 
-            char *message_copy = strdup(message);
-            char *message_type = strtok(message_copy, "|");
+            char *message_type = strtok(message, "|");
+            char *timestamp = strtok(NULL, "|");
             char *token = strtok(NULL, "|");
             char *data = strtok(NULL, "|");
+            char *checksum = strtok(NULL, "|");
 
             char response[BUFFER_SIZE];
             memset(response, 0, BUFFER_SIZE);
 
-            // --- Autenticación ---
             if (message_type && strcmp(message_type, "AUTH_REQUEST") == 0) {
-                 char *username = data ? strtok(data, ":") : NULL;
-                 char *password = data ? strtok(NULL, ":") : NULL;
-                 if (username && password) {
-                    int auth_result = authenticate_user(username, password);
-                    if (auth_result >= 0) {
-                         generate_token(clients[client_index].token);
-                         strcpy(clients[client_index].username, username);
-                         clients[client_index].user_type = auth_result;
-                         sprintf(response, "AUTH_RESPONSE|%ld|%s|%s:200|CHECKSUM",
-                                 (long)time(NULL), clients[client_index].token,
-                                 auth_result == 1 ? "ADMIN" : "OBSERVER");
-                    } else {
-                         sprintf(response, "AUTH_RESPONSE|%ld|NULL|ERROR:401|CHECKSUM", (long)time(NULL));
-                    }
-                 }
+                char *username = data ? strtok(data, ":") : NULL;
+                char *password = data ? strtok(NULL, ":") : NULL;
+                int auth_result = authenticate_user(username, password);
+                if (auth_result >= 0) {
+                    generate_token(clients[client_index].token);
+                    strcpy(clients[client_index].username, username);
+                    clients[client_index].user_type = auth_result;
+                    sprintf(response, "AUTH_RESPONSE|%lld|%s|%s:200|CHECKSUM", (long long)time(NULL), clients[client_index].token,
+                            auth_result == 1 ? "ADMIN" : "OBSERVER");
+                } else {
+                    sprintf(response, "AUTH_RESPONSE|%lld|NULL|ERROR:401|CHECKSUM", (long long)time(NULL));
+                }
             }
-            // --- Comandos de administrador ---
             else if (message_type && strcmp(message_type, "COMMAND_REQUEST") == 0) {
                 if (clients[client_index].user_type == 1 && token && strcmp(token, clients[client_index].token) == 0) {
                     char *command = data ? strtok(data, ":") : NULL;
                     char *params = data ? strtok(NULL, ":") : NULL;
                     process_command(client_index, command, params);
-                    sprintf(response, "COMMAND_RESPONSE|%ld|NULL|200:Comando procesado|CHECKSUM", (long)time(NULL));
+                    sprintf(response, "COMMAND_RESPONSE|%ld|NULL|200:Comando procesado|CHECKSUM", time(NULL));
                 } else {
-                    sprintf(response, "COMMAND_RESPONSE|%ld|NULL|401:No autorizado|CHECKSUM", (long)time(NULL));
+                    sprintf(response, "COMMAND_RESPONSE|%ld|NULL|401:No autorizado|CHECKSUM", time(NULL));
                 }
             }
-            // --- Listar usuarios conectados ---
             else if (message_type && strcmp(message_type, "LIST_USERS_REQUEST") == 0) {
-                 if (clients[client_index].user_type == 1 && token && strcmp(token, clients[client_index].token) == 0) {
+                if (clients[client_index].user_type == 1 && token && strcmp(token, clients[client_index].token) == 0) {
                     pthread_mutex_lock(&clients_mutex);
                     int user_count = 0;
                     char user_list[500] = "";
@@ -290,25 +249,23 @@ void *client_handler(void *arg) {
                         }
                     }
                     pthread_mutex_unlock(&clients_mutex);
-                    sprintf(response, "LIST_USERS_RESPONSE|%ld|NULL|%d:%s|CHECKSUM", (long)time(NULL), user_count, user_list);
-                 } else {
-                    sprintf(response, "ERROR|%ld|NULL|401:No autorizado|CHECKSUM", (long)time(NULL));
-                 }
+                    sprintf(response, "LIST_USERS_RESPONSE|%ld|NULL|%d:%s|CHECKSUM", time(NULL), user_count, user_list);
+                } else {
+                    sprintf(response, "ERROR|%ld|NULL|401:No autorizado|CHECKSUM", time(NULL));
+                }
             }
-            // --- Mensaje inválido ---
             else {
-                sprintf(response, "ERROR|%ld|NULL|400:Mensaje inválido|CHECKSUM", (long)time(NULL));
+                sprintf(response, "ERROR|%ld|NULL|400:Mensaje inválido|CHECKSUM", time(NULL));
             }
 
-            // --- Enviar respuesta ---
             char response_with_newline[BUFFER_SIZE + 4];
             snprintf(response_with_newline, sizeof(response_with_newline), "%s\r\n", response);
             send(clients[client_index].socket, response_with_newline, strlen(response_with_newline), 0);
-            log_message(client_info, "RESPONSE", response);
+            log_message(client_info, "RESPONSE", response_with_newline);
 
-            free(message_copy);
-            memmove(recv_buffer, line_end + 2, recv_len - (msg_len + 2));
-            recv_len -= (msg_len + 2);
+            int total_consumed = msg_len + 2;
+            memmove(recv_buffer, line_end + 2, recv_len - total_consumed);
+            recv_len -= total_consumed;
             recv_buffer[recv_len] = '\0';
         }
     }
@@ -318,70 +275,18 @@ void *client_handler(void *arg) {
     return NULL;
 }
 
-/*
- * Procesa los comandos recibidos de los clientes administradores y actualiza el estado del vehículo.
- */
-void process_command(int client_idx, const char *command, const char *params) {
-    pthread_mutex_lock(&vehicle_mutex);
-    if (strcmp(command, "SPEED_UP") == 0) {
-        float increment = params ? atof(params) : 5.0;
-        vehicle.speed += increment;
-        if (vehicle.speed > 120) vehicle.speed = 120;
-    } else if (strcmp(command, "SLOW_DOWN") == 0) {
-        float decrement = params ? atof(params) : 5.0;
-        vehicle.speed -= decrement;
-        if (vehicle.speed < 0) vehicle.speed = 0;
-    } else if (strcmp(command, "TURN_LEFT") == 0) {
-        strcpy(vehicle.direction, "WEST");
-    } else if (strcmp(command, "TURN_RIGHT") == 0) {
-        strcpy(vehicle.direction, "EAST");
-    } else if (strcmp(command, "STOP") == 0) {
-        vehicle.speed = 0;
-    }
-    pthread_mutex_unlock(&vehicle_mutex);
-}
-
-/*
- * Verifica las credenciales de usuario y retorna el tipo de usuario.
- * Retorna 1 para ADMIN, 0 para OBSERVER, -1 para no autorizado.
- */
-int authenticate_user(const char *username, const char *password) {
-    if (username && password) {
-        if (strcmp(username, "admin") == 0 && strcmp(password, "admin123") == 0) return 1;
-        if (strcmp(username, "observer") == 0 && strcmp(password, "observer123") == 0) return 0;
-    }
-    return -1;
-}
-
-/*
- * Genera un token aleatorio para la sesión del cliente.
- */
-void generate_token(char *token) {
-    const char chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    srand(time(NULL));
-    for (int i = 0; i < TOKEN_SIZE; i++) {
-        token[i] = chars[rand() % (sizeof(chars) - 1)];
-    }
-    token[TOKEN_SIZE] = '\0';
-}
-/*
- * Envía periódicamente los datos de telemetría a todos los clientes conectados.
- */
 void *telemetry_broadcaster(void *arg) {
     char telemetry_msg[BUFFER_SIZE];
     while (running) {
-        sleep(10);
-
         pthread_mutex_lock(&vehicle_mutex);
-        // Simulación de cambios en telemetría
         vehicle.speed += (rand() % 20 - 10) * 0.1;
         if (vehicle.speed < 0) vehicle.speed = 0;
         if (vehicle.speed > 120) vehicle.speed = 120;
-        vehicle.battery -= 0.01;
-        if (vehicle.battery < 0) vehicle.battery = 100.0;
-
-        sprintf(telemetry_msg, "TELEMETRY|%ld|NULL|%.1f:%.1f:%.1f:%s:%.6f:%.6f|CHECKSUM\r\n",
-                (long)time(NULL), vehicle.speed, vehicle.battery, vehicle.temperature,
+        vehicle.battery -= 0.1;
+        if (vehicle.battery < 0) vehicle.battery = 0;
+        vehicle.temperature += (rand() % 6 - 3) * 0.1;
+        sprintf(telemetry_msg, "TELEMETRY|%ld|NULL|%.1f:%.1f:%.1f:%s:%.6f:%.6f|CHECKSUM",
+                time(NULL), vehicle.speed, vehicle.battery, vehicle.temperature,
                 vehicle.direction, vehicle.latitude, vehicle.longitude);
         pthread_mutex_unlock(&vehicle_mutex);
 
@@ -392,34 +297,59 @@ void *telemetry_broadcaster(void *arg) {
             }
         }
         pthread_mutex_unlock(&clients_mutex);
+        sleep(10);
     }
     return NULL;
 }
 
-/*
- * Elimina y limpia la información de un cliente desconectado.
- */
+void process_command(int client_idx, const char *command, const char *params) {
+    pthread_mutex_lock(&vehicle_mutex);
+    if (strcmp(command, "SPEED_UP") == 0) {
+        float increment = params ? atof(params) : 5.0;
+        vehicle.speed += increment;
+        if (vehicle.speed > 120) vehicle.speed = 120;
+    }
+    else if (strcmp(command, "SLOW_DOWN") == 0) {
+        float decrement = params ? atof(params) : 5.0;
+        vehicle.speed -= decrement;
+        if (vehicle.speed < 0) vehicle.speed = 0;
+    }
+    else if (strcmp(command, "TURN_LEFT") == 0) {
+        strcpy(vehicle.direction, "WEST");
+    }
+    else if (strcmp(command, "TURN_RIGHT") == 0) {
+        strcpy(vehicle.direction, "EAST");
+    }
+    else if (strcmp(command, "STOP") == 0) {
+        vehicle.speed = 0;
+    }
+    pthread_mutex_unlock(&vehicle_mutex);
+}
+
+int authenticate_user(const char *username, const char *password) {
+    if (strcmp(username, "admin") == 0 && strcmp(password, "admin123") == 0) return 1;
+    if (strcmp(username, "observer") == 0 && strcmp(password, "observer123") == 0) return 0;
+    return -1;
+}
+
+void generate_token(char *token) {
+    const char chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    for (int i = 0; i < TOKEN_SIZE; i++) token[i] = chars[rand() % (sizeof(chars) - 1)];
+    token[TOKEN_SIZE] = '\0';
+}
+
 void remove_client(int index) {
     pthread_mutex_lock(&clients_mutex);
-    if(clients[index].active) {
-        closesocket(clients[index].socket);
-        clients[index].active = 0;
-        memset(clients[index].username, 0, MAX_USERNAME + 1);
-        memset(clients[index].token, 0, TOKEN_SIZE + 1);
-        clients[index].user_type = -1;
-    }
+    close(clients[index].socket);
+    clients[index].active = 0;
+    memset(&clients[index], 0, sizeof(client_t));
     pthread_mutex_unlock(&clients_mutex);
 }
 
-/*
- * Registra mensajes en el log y en consola, con timestamp y tipo de evento.
- */
 void log_message(const char *client_info, const char *type, const char *message) {
     time_t now = time(NULL);
-    char time_buf[26];
-    char* time_str = ctime_r(&now, time_buf);
+    char *time_str = ctime(&now);
     time_str[strlen(time_str) - 1] = '\0';
-
     printf("[%s] [%s] [%s] %s\n", time_str, client_info, type, message);
     if (log_file) {
         fprintf(log_file, "[%s] [%s] [%s] %s\n", time_str, client_info, type, message);
@@ -427,38 +357,13 @@ void log_message(const char *client_info, const char *type, const char *message)
     }
 }
 
-/*
- * Maneja la limpieza y cierre seguro del servidor ante señales de terminación.
- */
 void cleanup_and_exit(int sig) {
-    printf("\nCerrando servidor (señal %d)...\n", sig);
+    printf("\nCerrando servidor...\n");
     running = 0;
-
-    // Despertar al accept() creando una conexión dummy
-    SOCKET dummy_socket = socket(AF_INET, SOCK_STREAM, 0);
-    struct sockaddr_in self_addr;
-    memset(&self_addr, 0, sizeof(self_addr));
-    self_addr.sin_family = AF_INET;
-    self_addr.sin_port = htons(12345);
-    self_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-    connect(dummy_socket, (struct sockaddr*)&self_addr, sizeof(self_addr));
-    closesocket(dummy_socket);
-
     for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (clients[i].active) {
-            closesocket(clients[i].socket);
-        }
+        if (clients[i].active) close(clients[i].socket);
     }
-
-    closesocket(server_socket);
-
-    if (log_file) {
-        fclose(log_file);
-    }
-
-    printf("Servidor cerrado limpiamente.\n");
+    close(server_socket);
+    if (log_file) fclose(log_file);
     exit(0);
 }
-
-
-
