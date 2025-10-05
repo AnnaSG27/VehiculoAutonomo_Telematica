@@ -87,7 +87,8 @@ La arquitectura refleja un modelo centralizado donde un único servidor actúa c
 	- Mismas capacidades que cliente Python
 	- Look & Feel nativo del sistema
 
-  
+  <img width="756" height="599" alt="image" src="https://github.com/user-attachments/assets/93dbe021-6734-4c47-b850-ce75e6102d8b" />
+
 
 ## Instalación y Configuración
 ### Requisitos del Sistema
