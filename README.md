@@ -583,6 +583,8 @@ demo/
 ```
 ### Video Demostrativo (12 minutos)
 
+https://eafit-my.sharepoint.com/:v:/g/personal/imarquezc_eafit_edu_co/ERzkgp8oUrRBuCwdt3M9aXsBJZB69uycG_3wj2BKzSMNJw?e=iyUDGM&nav=eyJyZWZlcnJhbEluZm8iOnsicmVmZXJyYWxBcHAiOiJTdHJlYW1XZWJBcHAiLCJyZWZlcnJhbE1vZGUiOiJtaXMiLCJyZWZlcnJhbFZpZXciOiJwb3N0cm9sbC1jb3B5bGluayIsInJlZmVycmFsUGxheWJhY2tTZXNzaW9uSWQiOiIwODFlZmUxZS1lNmQ0LTRhNjktYTgxMy1lODZhOGJmNmUwZTAifX0%3D
+
 1.  **Introducción (1 min)**: Explicación del proyecto y objetivos
 
 2.  **Arquitectura (2 min)**: Diagrama y explicación componentes
