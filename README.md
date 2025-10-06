@@ -545,13 +545,13 @@ grep  "REQUEST"  logs/vehicle.log | cut  -d' '  -f2 | sort | uniq  -c
 
 - [x] Documentación completa
 
-- [ ] Video demostrativo (12 min)
+- [x] Video demostrativo (12 min)
 
 - [x] Repositorio GitHub configurado
 
-- [ ] Código comentado y limpio
+- [x] Código comentado y limpio
 
-- [ ] Pruebas realizadas
+- [x] Pruebas realizadas
 
   
 
